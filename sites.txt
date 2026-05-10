@@ -1,0 +1,9 @@
+# Daftar URL yang dimonitor (satu per baris)
+# Baris yang diawali '#' atau kosong akan diabaikan
+# Format: <url>  [label opsional]
+https://www.google.com           Google
+https://github.com               GitHub
+https://api.github.com           GitHub API
+https://www.cloudflare.com       Cloudflare
+https://httpbin.org/status/200   HTTPBin OK
+https://httpbin.org/status/500   HTTPBin 500

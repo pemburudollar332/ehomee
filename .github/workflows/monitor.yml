@@ -1,0 +1,62 @@
+name: monitor
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # tiap 15 menit
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "sites.txt"
+      - "scripts/check.sh"
+      - ".github/workflows/monitor.yml"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y curl openssl ca-certificates
+
+      - name: Run checks
+        run: bash scripts/check.sh
+
+      - name: Commit hasil
+        run: |
+          git config user.name "ehomee-bot"
+          git config user.email "ehomee-bot@users.noreply.github.com"
+          git add data/status.json data/history.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(monitor): update status $(date -u +%FT%TZ)"
+            git push
+          else
+            echo "no changes"
+          fi
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
