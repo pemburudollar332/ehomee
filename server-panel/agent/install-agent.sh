@@ -176,40 +176,68 @@ else
 fi
 
 # ---- dependencies ------------------------------------------------------
-need_deps() {
+# HANYA python3 + curl yang WAJIB. inotify-tools opsional: kalau tidak ada,
+# agent fallback ke polling murni Python.
+need_deps_required() {
   local miss=()
-  command -v python3    >/dev/null 2>&1 || miss+=("python3")
-  command -v curl       >/dev/null 2>&1 || miss+=("curl")
-  command -v inotifywait>/dev/null 2>&1 || miss+=("inotify-tools")
+  command -v python3 >/dev/null 2>&1 || miss+=("python3")
+  command -v curl    >/dev/null 2>&1 || miss+=("curl")
   printf '%s\n' "${miss[@]}"
 }
+has_inotify() { command -v inotifywait >/dev/null 2>&1; }
 
 if [[ $IS_ROOT -eq 1 ]]; then
   export DEBIAN_FRONTEND=noninteractive
-  if command -v apt-get >/dev/null 2>&1; then
-    echo ">> install dependencies (apt)..."
-    apt-get update -qq
-    apt-get install -y -qq python3 inotify-tools ca-certificates curl
-  elif command -v dnf >/dev/null 2>&1; then
-    echo ">> install dependencies (dnf)..."
-    dnf install -y python3 inotify-tools ca-certificates curl
-  elif command -v yum >/dev/null 2>&1; then
-    echo ">> install dependencies (yum)..."
-    yum install -y python3 inotify-tools ca-certificates curl
-  elif command -v apk >/dev/null 2>&1; then
-    echo ">> install dependencies (apk)..."
-    apk add --no-cache python3 inotify-tools ca-certificates curl
+  MISSING_REQ="$(need_deps_required | tr '\n' ' ' | sed 's/ $//')"
+  if [[ -n "$MISSING_REQ" ]]; then
+    if command -v apt-get >/dev/null 2>&1; then
+      echo ">> install dependencies wajib (apt): $MISSING_REQ"
+      apt-get update -qq
+      # inotify-tools di-try (bonus) tapi tidak fatal kalau gagal
+      apt-get install -y -qq python3 ca-certificates curl || true
+      apt-get install -y -qq inotify-tools 2>/dev/null || echo "   (inotify-tools tidak terpasang — pakai polling)"
+    elif command -v dnf >/dev/null 2>&1; then
+      echo ">> install dependencies wajib (dnf)..."
+      dnf install -y python3 ca-certificates curl || true
+      dnf install -y inotify-tools 2>/dev/null || echo "   (inotify-tools tidak terpasang — pakai polling)"
+    elif command -v yum >/dev/null 2>&1; then
+      echo ">> install dependencies wajib (yum)..."
+      yum install -y python3 ca-certificates curl || true
+      yum install -y inotify-tools 2>/dev/null || echo "   (inotify-tools tidak terpasang — pakai polling)"
+    elif command -v apk >/dev/null 2>&1; then
+      echo ">> install dependencies wajib (apk)..."
+      apk add --no-cache python3 ca-certificates curl || true
+      apk add --no-cache inotify-tools 2>/dev/null || echo "   (inotify-tools tidak terpasang — pakai polling)"
+    else
+      echo "WARNING: package manager tidak terdeteksi. Pastikan python3 + curl tersedia." >&2
+    fi
+  else
+    # semua wajib sudah ada; coba install inotify-tools sebagai bonus
+    if ! has_inotify && command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y -qq inotify-tools 2>/dev/null || true
+    fi
   fi
 else
-  MISSING="$(need_deps | tr '\n' ' ' | sed 's/ $//')"
-  if [[ -n "$MISSING" ]]; then
+  MISSING_REQ="$(need_deps_required | tr '\n' ' ' | sed 's/ $//')"
+  if [[ -n "$MISSING_REQ" ]]; then
     echo ""
-    echo "ERROR: dependency belum ada di sistem: $MISSING" >&2
-    echo "       Mode user tidak bisa install paket. Minta admin jalankan sekali:" >&2
-    echo "         sudo apt install -y python3 inotify-tools curl ca-certificates" >&2
-    echo "         # atau: sudo dnf/yum/apk install python3 inotify-tools curl ca-certificates" >&2
+    echo "ERROR: dependency wajib belum ada: $MISSING_REQ" >&2
+    echo "       Agent butuh MINIMAL: python3 + curl. Minta admin jalankan sekali:" >&2
+    echo "         sudo apt install -y python3 curl ca-certificates" >&2
+    echo "         # atau: sudo dnf/yum/apk install python3 curl ca-certificates" >&2
+    echo ""
+    echo "       Catatan: inotify-tools TIDAK wajib (agent auto-fallback ke polling)." >&2
     exit 1
   fi
+fi
+
+# set WATCH_MODE otomatis kalau inotifywait tidak ada
+if ! has_inotify; then
+  WATCH_MODE_HINT="polling"
+  echo ">> watcher mode : polling (inotify-tools tidak ada — pakai scan berkala)"
+else
+  WATCH_MODE_HINT="inotify"
+  echo ">> watcher mode : inotify (real-time)"
 fi
 
 mkdir -p "$AGENT_DIR"
@@ -255,7 +283,9 @@ REPORT_URL=$REPORT_URL
 AGENT_ID=$AGENT_ID
 API_KEY=$API_KEY
 WATCH_DIR=$WATCH_DIR
+WATCH_MODE=${WATCH_MODE_HINT:-auto}
 INTERVAL=30
+POLL_INTERVAL=5
 EOF
 chmod 600 "$AGENT_DIR/config.env"
 

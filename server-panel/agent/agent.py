@@ -3,14 +3,17 @@
 ehomee-agent
 Menjalankan:
   - collector: mengumpulkan metrik sistem (uptime, load, mem, disk) tiap INTERVAL detik
-  - watcher: memantau WATCH_DIR dengan `inotifywait` dan mengumpulkan event
+  - watcher: memantau WATCH_DIR. Mode watcher dipilih otomatis:
+      1. inotify  : pakai `inotifywait` kalau tersedia (real-time, CPU rendah)
+      2. polling  : fallback murni Python stdlib (scan mtime tiap POLL_INTERVAL detik)
 
 Lalu push ke REPORT_URL (POST JSON) dengan header:
   X-Agent-Id: <AGENT_ID>
   Authorization: Bearer <API_KEY>
 
-Dikonfigurasi via environment (disuntik systemd EnvironmentFile).
-Dependensi: stdlib Python 3 + `inotifywait` (paket inotify-tools).
+Dikonfigurasi via environment (disuntik oleh wrapper agent-start.sh).
+Dependensi wajib: Python 3 stdlib saja.
+Opsional: `inotifywait` (paket inotify-tools) untuk efisiensi lebih baik.
 """
 from __future__ import annotations
 
@@ -34,6 +37,12 @@ AGENT_ID   = os.environ.get("AGENT_ID", "")
 API_KEY    = os.environ.get("API_KEY", "")
 WATCH_DIR  = os.environ.get("WATCH_DIR", "/var/www/html")
 INTERVAL   = max(10, int(os.environ.get("INTERVAL", "30")))
+# Mode watcher yang dipaksa: 'auto' (default), 'inotify', atau 'polling'.
+WATCH_MODE = os.environ.get("WATCH_MODE", "auto").lower()
+# Interval polling dalam detik (kalau fallback polling).
+POLL_INTERVAL = max(2, int(os.environ.get("POLL_INTERVAL", "5")))
+# Batasi jumlah file yang di-scan dalam mode polling (anti blow-up).
+POLL_MAX_FILES = max(1000, int(os.environ.get("POLL_MAX_FILES", "50000")))
 
 if not (REPORT_URL and AGENT_ID and API_KEY):
     print("ERROR: REPORT_URL, AGENT_ID, API_KEY wajib diisi", file=sys.stderr)
@@ -136,8 +145,22 @@ def post_report(metrics: dict | None, events: list[dict]) -> None:
         print(f"[agent] report error: {e}", file=sys.stderr)
 
 
-# --- watcher thread --------------------------------------------------------
-def watcher_thread(event_q: "queue.Queue[dict]") -> None:
+# --- watcher: inotify (preferred) -----------------------------------------
+def _has_inotifywait() -> bool:
+    """Cek apakah inotifywait tersedia di PATH."""
+    try:
+        subprocess.run(
+            ["inotifywait", "--help"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False, timeout=3,
+        )
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def watcher_inotify(event_q: "queue.Queue[dict]") -> None:
+    """Stream event dari inotifywait."""
     Path(WATCH_DIR).mkdir(parents=True, exist_ok=True)
     cmd = [
         "inotifywait", "-m", "-r",
@@ -146,19 +169,17 @@ def watcher_thread(event_q: "queue.Queue[dict]") -> None:
         "--format", "%T|%w%f|%e",
         WATCH_DIR,
     ]
+    print(f"[agent] watcher mode=inotify dir={WATCH_DIR}")
     while True:
         try:
             proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                bufsize=1,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1,
             )
         except FileNotFoundError:
-            print("[agent] inotifywait tidak ditemukan. install paket inotify-tools.", file=sys.stderr)
-            time.sleep(30)
-            continue
+            print("[agent] inotifywait hilang saat runtime, fallback ke polling", file=sys.stderr)
+            watcher_polling(event_q)
+            return
 
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -170,9 +191,93 @@ def watcher_thread(event_q: "queue.Queue[dict]") -> None:
             except ValueError:
                 continue
             event_q.put({"ts": ts, "path": path, "event": ev})
-        # kalau inotifywait exit (mis. WATCH_DIR hilang), retry
         proc.wait()
         time.sleep(3)
+
+
+# --- watcher: polling (fallback murni Python) -----------------------------
+def _snapshot(root: str, max_files: int) -> "dict[str, tuple]":
+    """Scan WATCH_DIR, return {path: (mtime_ns, size)}. Dibatasi max_files."""
+    snap = {}
+    try:
+        stack = [root]
+        count = 0
+        while stack and count < max_files:
+            cur = stack.pop()
+            try:
+                with os.scandir(cur) as it:
+                    for entry in it:
+                        if count >= max_files:
+                            break
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                name = entry.name
+                                # skip folder berat / irrelevant
+                                if name in {".git", "node_modules", "__pycache__", "vendor"}:
+                                    continue
+                                stack.append(entry.path)
+                            else:
+                                st = entry.stat(follow_symlinks=False)
+                                snap[entry.path] = (st.st_mtime_ns, st.st_size)
+                                count += 1
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+    except Exception as e:
+        print(f"[agent] snapshot error: {e}", file=sys.stderr)
+    return snap
+
+
+def watcher_polling(event_q: "queue.Queue[dict]") -> None:
+    """Fallback: scan folder tiap POLL_INTERVAL detik, diff mtime+size."""
+    Path(WATCH_DIR).mkdir(parents=True, exist_ok=True)
+    print(f"[agent] watcher mode=polling dir={WATCH_DIR} interval={POLL_INTERVAL}s max_files={POLL_MAX_FILES}")
+    prev = _snapshot(WATCH_DIR, POLL_MAX_FILES)
+    while True:
+        time.sleep(POLL_INTERVAL)
+        try:
+            curr = _snapshot(WATCH_DIR, POLL_MAX_FILES)
+        except Exception as e:
+            print(f"[agent] polling scan error: {e}", file=sys.stderr)
+            continue
+
+        ts = now_iso()
+        prev_set = set(prev.keys())
+        curr_set = set(curr.keys())
+
+        # created
+        for p in curr_set - prev_set:
+            event_q.put({"ts": ts, "path": p, "event": "CREATE"})
+        # deleted
+        for p in prev_set - curr_set:
+            event_q.put({"ts": ts, "path": p, "event": "DELETE"})
+        # modified (mtime atau size berubah)
+        for p in curr_set & prev_set:
+            if curr[p] != prev[p]:
+                event_q.put({"ts": ts, "path": p, "event": "MODIFY"})
+
+        prev = curr
+
+
+# --- watcher dispatcher ---------------------------------------------------
+def watcher_thread(event_q: "queue.Queue[dict]") -> None:
+    """Pilih mode watcher berdasarkan WATCH_MODE + ketersediaan inotifywait."""
+    mode = WATCH_MODE
+    if mode == "auto":
+        mode = "inotify" if _has_inotifywait() else "polling"
+
+    if mode == "inotify":
+        if not _has_inotifywait():
+            print("[agent] WATCH_MODE=inotify tapi inotifywait tidak ada; fallback ke polling", file=sys.stderr)
+            watcher_polling(event_q)
+        else:
+            watcher_inotify(event_q)
+    elif mode == "polling":
+        watcher_polling(event_q)
+    else:
+        print(f"[agent] WATCH_MODE={WATCH_MODE} tidak dikenal; pakai polling", file=sys.stderr)
+        watcher_polling(event_q)
 
 
 def drain(q: "queue.Queue[dict]", max_items: int = 200) -> list[dict]:
@@ -187,7 +292,7 @@ def drain(q: "queue.Queue[dict]", max_items: int = 200) -> list[dict]:
 
 # --- main loop -------------------------------------------------------------
 def main() -> None:
-    print(f"[agent] start id={AGENT_ID} panel={REPORT_URL} watch={WATCH_DIR} interval={INTERVAL}s")
+    print(f"[agent] start id={AGENT_ID} panel={REPORT_URL} watch={WATCH_DIR} interval={INTERVAL}s mode={WATCH_MODE}")
     q: "queue.Queue[dict]" = queue.Queue(maxsize=10000)
     t = threading.Thread(target=watcher_thread, args=(q,), daemon=True)
     t.start()
@@ -197,7 +302,6 @@ def main() -> None:
     last_tick = time.monotonic()
 
     while True:
-        # sering kirim event kalau ada, tapi minimum INTERVAL untuk metrics
         time.sleep(2)
         events = drain(q)
         now = time.monotonic()
