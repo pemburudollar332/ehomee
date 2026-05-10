@@ -1,0 +1,24 @@
+# Proteksi dasar ehomee panel
+Options -Indexes
+ServerSignature Off
+
+# Batasi size upload (boleh diubah)
+php_value upload_max_filesize 100M
+php_value post_max_size 110M
+
+# Block akses ke file dotfile
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
+
+# Uncomment baris berikut untuk membatasi akses ke IP tertentu
+# <RequireAll>
+#   Require ip 1.2.3.4
+# </RequireAll>
+
+# Security headers
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "DENY"
+  Header set Referrer-Policy "no-referrer"
+</IfModule>
