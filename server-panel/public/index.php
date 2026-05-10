@@ -112,6 +112,9 @@ $csrf = csrf_token();
         <label>Watch dir di server tersebut
           <input id="add-agent-watch" value="/var/www/html">
         </label>
+        <label class="switch" style="flex-direction:row; align-items:center;">
+          <input type="checkbox" id="add-agent-userm"> jalankan sebagai user biasa (tanpa sudo)
+        </label>
       </div>
       <div class="form-row">
         <button class="btn primary" id="add-agent-gen">Generate one-liner</button>

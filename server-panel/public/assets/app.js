@@ -383,15 +383,19 @@
   $('#btn-add-agent').onclick = () => {
     $('#add-agent-name').value = '';
     $('#add-agent-watch').value = '/var/www/html';
+    $('#add-agent-userm').checked = false;
     $('#add-agent-result').classList.add('hidden');
     $('#modal-add-agent').classList.remove('hidden');
   };
   $('#add-agent-close').onclick = () => $('#modal-add-agent').classList.add('hidden');
   $('#add-agent-gen').onclick = () => {
     const name  = $('#add-agent-name').value.trim();
-    const watch = $('#add-agent-watch').value.trim() || '/var/www/html';
+    const userMode = $('#add-agent-userm').checked;
+    let watch = $('#add-agent-watch').value.trim();
+    if (!watch) watch = userMode ? '$HOME' : '/var/www/html';
     const qs = new URLSearchParams({ token: enrollToken, name, watch });
-    const oneliner = `curl -fsSL '${installUrl}?${qs.toString()}' | sudo bash`;
+    const prefix = userMode ? 'bash' : 'sudo bash';
+    const oneliner = `curl -fsSL '${installUrl}?${qs.toString()}' | ${prefix}`;
     $('#add-agent-cmd').textContent = oneliner;
     $('#add-agent-result').classList.remove('hidden');
   };
