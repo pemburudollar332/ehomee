@@ -35,10 +35,71 @@ if [[ $IS_ROOT -eq 1 ]]; then
   AGENT_DIR="${AGENT_DIR:-/opt/ehomee-agent}"
 else
   AGENT_DIR="${AGENT_DIR:-$HOME/.local/share/ehomee-agent}"
-  # default watch_dir untuk user biasa
-  if [[ -z "${WATCH_DIR// }" || "$WATCH_DIR" == "/var/www/html" || "$WATCH_DIR" == '$HOME' ]]; then
-    WATCH_DIR="$HOME"
+fi
+
+# ---- auto-detect watch dir ---------------------------------------------
+# Kandidat: cek keberadaan + tidak kosong. Ambil yang pertama cocok.
+detect_watch_dir() {
+  local candidates=()
+  if [[ $IS_ROOT -eq 1 ]]; then
+    candidates+=(
+      "/var/www/html"
+      "/usr/share/nginx/html"
+      "/srv/http"
+      "/srv/www"
+      "/var/www"
+    )
+    # cPanel-style: /home/*/public_html (ambil yang pertama ada & non-empty)
+    for d in /home/*/public_html; do
+      [[ -d "$d" ]] && candidates+=("$d")
+    done
+    # DirectAdmin-style: /home/*/domains/*/public_html
+    for d in /home/*/domains/*/public_html; do
+      [[ -d "$d" ]] && candidates+=("$d")
+    done
+  else
+    candidates+=(
+      "$HOME/public_html"
+      "$HOME/www"
+      "$HOME/htdocs"
+      "$HOME/html"
+      "$HOME/public"
+    )
+    # DirectAdmin per-domain
+    for d in "$HOME"/domains/*/public_html; do
+      [[ -d "$d" ]] && candidates+=("$d")
+    done
+    candidates+=("$HOME")
   fi
+
+  # pilih yang ada + bukan kosong + bisa di-read
+  for d in "${candidates[@]}"; do
+    if [[ -d "$d" && -r "$d" ]]; then
+      # preferensi: ada file di dalamnya (bukan folder kosong)
+      if [[ -n "$(ls -A "$d" 2>/dev/null | head -1)" ]]; then
+        echo "$d"
+        return
+      fi
+    fi
+  done
+  # fallback: yang pertama ada walau kosong
+  for d in "${candidates[@]}"; do
+    [[ -d "$d" ]] && { echo "$d"; return; }
+  done
+  # fallback terakhir
+  echo "${HOME:-/tmp}"
+}
+
+# Tentukan WATCH_DIR final
+if [[ -z "${WATCH_DIR// }" || "$WATCH_DIR" == "auto" || "$WATCH_DIR" == "__WATCH_DIR__" ]]; then
+  WATCH_DIR="$(detect_watch_dir)"
+  WATCH_AUTO=1
+elif [[ "$WATCH_DIR" == '$HOME' ]]; then
+  # user kirim '$HOME' literal (belum ter-expand) -> resolve
+  WATCH_DIR="$HOME"
+  WATCH_AUTO=0
+else
+  WATCH_AUTO=0
 fi
 
 # ---- deteksi kapabilitas sistem ----------------------------------------
@@ -80,7 +141,11 @@ echo ">> agent name   : $AGENT_NAME"
 echo ">> user         : $CURRENT_USER (uid=$EUID)"
 echo ">> method       : $METHOD"
 echo ">> install dir  : $AGENT_DIR"
-echo ">> watch dir    : $WATCH_DIR"
+if [[ "${WATCH_AUTO:-0}" == "1" ]]; then
+  echo ">> watch dir    : $WATCH_DIR  (auto-detected)"
+else
+  echo ">> watch dir    : $WATCH_DIR"
+fi
 
 # ---- dependencies ------------------------------------------------------
 need_deps() {

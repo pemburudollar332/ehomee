@@ -382,19 +382,31 @@
   // Modal Add agent (generate one-liner)
   $('#btn-add-agent').onclick = () => {
     $('#add-agent-name').value = '';
-    $('#add-agent-watch').value = '/var/www/html';
+    $('#add-agent-watch').value = '';
+    $('#add-agent-watch').classList.add('hidden');
+    $('#add-agent-watch-preset').value = 'auto';
     $('#add-agent-userm').checked = false;
     $('#add-agent-method').value = 'auto';
     $('#add-agent-result').classList.add('hidden');
     $('#modal-add-agent').classList.remove('hidden');
+  };
+  $('#add-agent-watch-preset').onchange = (e) => {
+    const custom = e.target.value === '__custom__';
+    $('#add-agent-watch').classList.toggle('hidden', !custom);
+    if (custom) { $('#add-agent-watch').focus(); }
   };
   $('#add-agent-close').onclick = () => $('#modal-add-agent').classList.add('hidden');
   $('#add-agent-gen').onclick = () => {
     const name  = $('#add-agent-name').value.trim();
     const userMode = $('#add-agent-userm').checked;
     const method = $('#add-agent-method').value || 'auto';
-    let watch = $('#add-agent-watch').value.trim();
-    if (!watch) watch = userMode ? '$HOME' : '/var/www/html';
+    const preset = $('#add-agent-watch-preset').value;
+    let watch;
+    if (preset === '__custom__') {
+      watch = $('#add-agent-watch').value.trim() || 'auto';
+    } else {
+      watch = preset; // bisa "auto", atau path literal
+    }
     const qs = new URLSearchParams({ token: enrollToken, name, watch, method });
     const prefix = userMode ? 'bash' : 'sudo bash';
     const oneliner = `curl -fsSL '${installUrl}?${qs.toString()}' | ${prefix}`;

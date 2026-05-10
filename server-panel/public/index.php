@@ -109,8 +109,18 @@ $csrf = csrf_token();
         <label>Nama server (opsional)
           <input id="add-agent-name" placeholder="srv-b, backend-1, db-prod...">
         </label>
-        <label>Watch dir di server tersebut
-          <input id="add-agent-watch" value="/var/www/html">
+        <label>Watch dir (folder yang mau dipantau)
+          <select id="add-agent-watch-preset">
+            <option value="auto">auto-detect (rekomendasi) — webroot/home/public</option>
+            <option value="/var/www/html">/var/www/html (Apache default)</option>
+            <option value="/usr/share/nginx/html">/usr/share/nginx/html (Nginx)</option>
+            <option value="/srv/http">/srv/http (Arch)</option>
+            <option value="$HOME/public_html">$HOME/public_html (cPanel)</option>
+            <option value="$HOME/www">$HOME/www</option>
+            <option value="$HOME">$HOME (seluruh home user)</option>
+            <option value="__custom__">— custom —</option>
+          </select>
+          <input id="add-agent-watch" class="hidden" placeholder="/path/custom">
         </label>
         <label class="switch" style="flex-direction:row; align-items:center;">
           <input type="checkbox" id="add-agent-userm"> jalankan sebagai user biasa (tanpa sudo)
