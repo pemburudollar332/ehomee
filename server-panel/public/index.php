@@ -15,7 +15,7 @@ $csrf = csrf_token();
 </head>
 <body>
 <header class="topbar">
-  <div class="bar">
+  <div class="topbar-inner">
     <h1>ehomee <span class="muted">panel</span></h1>
     <nav class="tabs">
       <button class="tab active" data-tab="files">Files</button>

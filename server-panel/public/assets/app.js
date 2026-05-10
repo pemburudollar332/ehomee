@@ -273,12 +273,12 @@
             <div class="k">Memory</div>
             <div class="v">
               ${fmtBytes(mem.used)} / ${fmtBytes(mem.total)} (${pct(mem.used, mem.total)})
-              <div class="bar"><div style="width:${pct(mem.used, mem.total)}"></div></div>
+              <div class="meter"><div style="width:${pct(mem.used, mem.total)}"></div></div>
             </div>
             <div class="k">Disk (${esc(disk.path)})</div>
             <div class="v">
               ${fmtBytes(disk.used)} / ${fmtBytes(disk.total)} (${pct(disk.used, disk.total)})
-              <div class="bar"><div style="width:${pct(disk.used, disk.total)}"></div></div>
+              <div class="meter"><div style="width:${pct(disk.used, disk.total)}"></div></div>
             </div>
           </div>
         </div>

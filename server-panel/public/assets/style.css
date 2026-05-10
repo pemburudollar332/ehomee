@@ -28,16 +28,16 @@ a:hover { text-decoration: underline; }
 
 /* top bar */
 .topbar { border-bottom: 1px solid var(--border); background: #0e141c; position: sticky; top: 0; z-index: 10; }
-.bar { display: flex; align-items: center; gap: 1rem; padding: .7rem 1rem; max-width: 1200px; margin: 0 auto; }
-.bar h1 { margin: 0; font-size: 1.05rem; letter-spacing: .3px; }
-.tabs { display: flex; gap: .25rem; margin-left: 1rem; }
+.topbar-inner { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; padding: .7rem 1rem; max-width: 1200px; margin: 0 auto; }
+.topbar-inner h1 { margin: 0; font-size: 1.05rem; letter-spacing: .3px; }
+.tabs { display: flex; flex-wrap: wrap; gap: .25rem; }
 .tab {
   background: transparent; color: var(--muted); border: 0; padding: .45rem .8rem;
   border-radius: 6px; cursor: pointer; font: inherit;
 }
 .tab:hover { color: var(--text); }
 .tab.active { background: var(--panel-2); color: var(--text); }
-.meta { margin-left: auto; display: flex; align-items: center; gap: .75rem; }
+.meta { margin-left: auto; display: flex; align-items: center; gap: .75rem; white-space: nowrap; }
 
 /* main views */
 main { max-width: 1200px; margin: 1rem auto; padding: 0 1rem; }
@@ -98,8 +98,8 @@ table.files td.acts .btn { margin-left: .25rem; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; display: grid; grid-template-columns: 120px 1fr; gap: .35rem .75rem; }
 .card .k { color: var(--muted); }
 .card .v { word-break: break-word; }
-.bar { display: block; background: var(--panel-2); height: 8px; border-radius: 4px; margin-top: 4px; overflow: hidden; padding: 0; }
-.bar > div { height: 100%; background: var(--accent); }
+.meter { display: block; background: var(--panel-2); height: 8px; border-radius: 4px; margin-top: 4px; overflow: hidden; padding: 0; width: 100%; }
+.meter > div { height: 100%; background: var(--accent); }
 pre.top { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: .75rem; overflow: auto; font-size: 12px; }
 
 @media (max-width: 780px) {
