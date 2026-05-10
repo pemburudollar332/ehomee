@@ -176,65 +176,66 @@ else
 fi
 
 # ---- dependencies ------------------------------------------------------
-# HANYA python3 + curl yang WAJIB. inotify-tools opsional: kalau tidak ada,
-# agent fallback ke polling murni Python.
-need_deps_required() {
-  local miss=()
-  command -v python3 >/dev/null 2>&1 || miss+=("python3")
-  command -v curl    >/dev/null 2>&1 || miss+=("curl")
-  printf '%s\n' "${miss[@]}"
-}
+# WAJIB: curl (bash sudah pasti ada karena script ini bash).
+# Python3 opsional: kalau ada, pakai agent.py (lebih robust). Kalau tidak, pakai
+# agent.sh (pure bash, dependency hanya curl + coreutils).
+has_curl()    { command -v curl    >/dev/null 2>&1; }
+has_python3() { command -v python3 >/dev/null 2>&1; }
 has_inotify() { command -v inotifywait >/dev/null 2>&1; }
 
 if [[ $IS_ROOT -eq 1 ]]; then
   export DEBIAN_FRONTEND=noninteractive
-  MISSING_REQ="$(need_deps_required | tr '\n' ' ' | sed 's/ $//')"
-  if [[ -n "$MISSING_REQ" ]]; then
+  if ! has_curl; then
     if command -v apt-get >/dev/null 2>&1; then
-      echo ">> install dependencies wajib (apt): $MISSING_REQ"
+      echo ">> install curl (apt)..."
       apt-get update -qq
-      # inotify-tools di-try (bonus) tapi tidak fatal kalau gagal
-      apt-get install -y -qq python3 ca-certificates curl || true
-      apt-get install -y -qq inotify-tools 2>/dev/null || echo "   (inotify-tools tidak terpasang — pakai polling)"
+      apt-get install -y -qq curl ca-certificates || true
     elif command -v dnf >/dev/null 2>&1; then
-      echo ">> install dependencies wajib (dnf)..."
-      dnf install -y python3 ca-certificates curl || true
-      dnf install -y inotify-tools 2>/dev/null || echo "   (inotify-tools tidak terpasang — pakai polling)"
+      dnf install -y curl ca-certificates || true
     elif command -v yum >/dev/null 2>&1; then
-      echo ">> install dependencies wajib (yum)..."
-      yum install -y python3 ca-certificates curl || true
-      yum install -y inotify-tools 2>/dev/null || echo "   (inotify-tools tidak terpasang — pakai polling)"
+      yum install -y curl ca-certificates || true
     elif command -v apk >/dev/null 2>&1; then
-      echo ">> install dependencies wajib (apk)..."
-      apk add --no-cache python3 ca-certificates curl || true
-      apk add --no-cache inotify-tools 2>/dev/null || echo "   (inotify-tools tidak terpasang — pakai polling)"
-    else
-      echo "WARNING: package manager tidak terdeteksi. Pastikan python3 + curl tersedia." >&2
+      apk add --no-cache curl ca-certificates || true
     fi
-  else
-    # semua wajib sudah ada; coba install inotify-tools sebagai bonus
-    if ! has_inotify && command -v apt-get >/dev/null 2>&1; then
-      apt-get install -y -qq inotify-tools 2>/dev/null || true
-    fi
+  fi
+  # Python3 & inotify-tools di-try (bonus, lebih efisien), tapi tidak fatal
+  if ! has_python3 && command -v apt-get >/dev/null 2>&1; then
+    apt-get install -y -qq python3 2>/dev/null || true
+  elif ! has_python3 && command -v dnf >/dev/null 2>&1; then
+    dnf install -y python3 2>/dev/null || true
+  fi
+  if ! has_inotify && command -v apt-get >/dev/null 2>&1; then
+    apt-get install -y -qq inotify-tools 2>/dev/null || true
   fi
 else
-  MISSING_REQ="$(need_deps_required | tr '\n' ' ' | sed 's/ $//')"
-  if [[ -n "$MISSING_REQ" ]]; then
+  # mode user — tidak bisa install paket; cek yang ada saja
+  if ! has_curl; then
     echo ""
-    echo "ERROR: dependency wajib belum ada: $MISSING_REQ" >&2
-    echo "       Agent butuh MINIMAL: python3 + curl. Minta admin jalankan sekali:" >&2
-    echo "         sudo apt install -y python3 curl ca-certificates" >&2
-    echo "         # atau: sudo dnf/yum/apk install python3 curl ca-certificates" >&2
-    echo ""
-    echo "       Catatan: inotify-tools TIDAK wajib (agent auto-fallback ke polling)." >&2
+    echo "ERROR: 'curl' tidak ada. Agent butuh MINIMAL: bash + curl." >&2
+    echo "       Minta admin jalankan sekali:" >&2
+    echo "         sudo apt install -y curl ca-certificates" >&2
+    echo "         # atau: sudo dnf/yum/apk install curl ca-certificates" >&2
     exit 1
   fi
+fi
+
+# pilih runtime agent: python3 prioritas (lebih robust), fallback ke pure bash
+if has_python3; then
+  RUNTIME="python"
+  AGENT_FILE="agent.py"
+  AGENT_URL_PATH="/api/agent.py.php"
+  echo ">> runtime      : python3 (agent.py)"
+else
+  RUNTIME="bash"
+  AGENT_FILE="agent.sh"
+  AGENT_URL_PATH="/api/agent.sh.php"
+  echo ">> runtime      : bash (agent.sh — pure bash, no python)"
 fi
 
 # set WATCH_MODE otomatis kalau inotifywait tidak ada
 if ! has_inotify; then
   WATCH_MODE_HINT="polling"
-  echo ">> watcher mode : polling (inotify-tools tidak ada — pakai scan berkala)"
+  echo ">> watcher mode : polling (scan berkala, inotify-tools tidak ada)"
 else
   WATCH_MODE_HINT="inotify"
   echo ">> watcher mode : inotify (real-time)"
@@ -243,10 +244,10 @@ fi
 mkdir -p "$AGENT_DIR"
 mkdir -p "$WATCH_DIR" 2>/dev/null || true
 
-# ---- fetch agent.py ----------------------------------------------------
-echo ">> fetch agent.py..."
-curl -fsSL "${PANEL_URL%/}/api/agent.py.php" -o "$AGENT_DIR/agent.py"
-chmod 0755 "$AGENT_DIR/agent.py"
+# ---- fetch agent file (python atau bash) -------------------------------
+echo ">> fetch $AGENT_FILE..."
+curl -fsSL "${PANEL_URL%/}${AGENT_URL_PATH}" -o "$AGENT_DIR/$AGENT_FILE"
+chmod 0755 "$AGENT_DIR/$AGENT_FILE"
 
 # ---- register ke panel -------------------------------------------------
 echo ">> register ke panel..."
@@ -266,9 +267,9 @@ REG_RESP="$(curl -fsSL -X POST \
   --data-urlencode "version=1.0" \
   "${PANEL_URL%/}/api/agent/register.php")"
 
-AGENT_ID="$(printf  '%s' "$REG_RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("agent_id",""))')"
-API_KEY="$(printf   '%s' "$REG_RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("api_key",""))')"
-REPORT_URL="$(printf '%s' "$REG_RESP"| python3 -c 'import json,sys;print(json.load(sys.stdin).get("report_url",""))')"
+AGENT_ID="$(printf '%s' "$REG_RESP" | grep -oE '"agent_id":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')"
+API_KEY="$(printf '%s' "$REG_RESP" | grep -oE '"api_key":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')"
+REPORT_URL="$(printf '%s' "$REG_RESP" | grep -oE '"report_url":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')"
 
 if [[ -z "$AGENT_ID" || -z "$API_KEY" ]]; then
   echo "Gagal register. Response:" >&2
@@ -286,20 +287,41 @@ WATCH_DIR=$WATCH_DIR
 WATCH_MODE=${WATCH_MODE_HINT:-auto}
 INTERVAL=30
 POLL_INTERVAL=5
+RUNTIME=$RUNTIME
+AGENT_FILE=$AGENT_FILE
 EOF
 chmod 600 "$AGENT_DIR/config.env"
 
 # ---- wrapper: agent-start.sh ------------------------------------------
-# Dipakai oleh semua method supaya cara start konsisten.
+# Memilih runtime python atau bash berdasar config.env.
 cat > "$AGENT_DIR/agent-start.sh" <<'WRAP'
 #!/usr/bin/env bash
-set -u
+set -eo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[[ -z "${HOME:-}" ]] && export HOME=/tmp
 set -a
 # shellcheck disable=SC1091
 . "$DIR/config.env"
 set +a
-exec /usr/bin/python3 "$DIR/agent.py"
+
+RUNTIME="${RUNTIME:-python}"
+AGENT_FILE="${AGENT_FILE:-agent.py}"
+
+case "$RUNTIME" in
+  python)
+    # prefer python3 di PATH
+    PY="$(command -v python3 || true)"
+    [[ -z "$PY" ]] && PY=/usr/bin/python3
+    exec "$PY" "$DIR/$AGENT_FILE"
+    ;;
+  bash)
+    exec /usr/bin/env bash "$DIR/$AGENT_FILE"
+    ;;
+  *)
+    echo "RUNTIME tidak dikenal: $RUNTIME" >&2
+    exit 2
+    ;;
+esac
 WRAP
 chmod 0755 "$AGENT_DIR/agent-start.sh"
 
