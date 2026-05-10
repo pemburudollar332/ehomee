@@ -106,9 +106,15 @@ chmod 600 "$CFG"
 find "$PANEL_DIR/data" -type d -exec chmod 775 {} \;
 find "$PANEL_DIR/data" -type f -exec chmod 664 {} \;
 
+# ---- clear PHP OPcache supaya install.sh.php baca template yang baru ----
+echo ">> clear PHP OPcache..."
+php -r 'function_exists("opcache_reset") && opcache_reset();' 2>/dev/null || true
+# Apache mod_php pakai OPcache terpisah (in-process). Harus restart Apache, bukan reload.
+
 # ---- apache ----
-echo ">> reload apache..."
-systemctl reload apache2 || systemctl restart apache2
+echo ">> FULL restart apache (clear in-process cache)..."
+systemctl restart apache2
+sleep 1
 
 # ---- cari port apache untuk panel ----
 PORT="$(awk '/^<VirtualHost/ && /:/ {gsub(/[<>]/,""); split($2,a,":"); print a[2]; exit}' \
@@ -156,8 +162,26 @@ if echo "$CONTENT" | head -n5 | grep -q '__PANEL_URL__'; then
 else
   echo "  OK   install.sh.php placeholder ter-replace"
 fi
-if echo "$CONTENT" | head -n5 | grep -q 'PANEL_URL kosong'; then
-  echo "  FAIL install.sh.php output error 'PANEL_URL kosong'"
+
+# VERIFIKASI FIX v2: pastikan kode baru benar-benar ter-serve (bukan cache)
+if echo "$CONTENT" | grep -qE '^set -euo pipefail'; then
+  echo "  FAIL installer masih pakai 'set -euo pipefail' (versi lama) — cache issue"
+  echo "       coba manual: sudo systemctl restart apache2"
+  FAILS=$((FAILS+1))
+else
+  echo "  OK   installer pakai 'set -eo pipefail' (fix v2 aktif)"
+fi
+if echo "$CONTENT" | grep -q 'getent passwd'; then
+  echo "  OK   installer punya HOME fallback (fix v2 aktif)"
+else
+  echo "  FAIL installer TIDAK punya HOME fallback — cache issue"
+  echo "       coba manual: sudo systemctl restart apache2"
+  FAILS=$((FAILS+1))
+fi
+if echo "$CONTENT" | grep -q '_PH_PREFIX'; then
+  echo "  OK   installer punya placeholder self-match guard (fix v2 aktif)"
+else
+  echo "  FAIL installer TIDAK punya placeholder guard — cache issue"
   FAILS=$((FAILS+1))
 fi
 
@@ -172,25 +196,34 @@ fi
 cat <<EOF
 
 =========================================
- PANEL UPDATE SUKSES
+ PANEL UPDATE SUKSES (semua check LULUS)
 =========================================
  URL panel        : $PUBLIC
  Config           : $CFG
  Backup sebelumnya: $BACKUP
  Enrollment token : $TOKEN
 
- One-liner siap paste di server target:
+ One-liner siap paste di server target (COPY PERSIS, pakai tanda kutip):
 
   MODE ROOT (default):
-    curl -fsSL '$PUBLIC/api/install.sh.php?token=$TOKEN&name=srv-b&watch=/var/www/html&method=auto' | sudo bash
+    curl -fsSL '$PUBLIC/api/install.sh.php?token=$TOKEN&name=srv-b&watch=auto&method=auto' | sudo bash
 
   MODE USER BIASA (tanpa sudo):
-    curl -fsSL '$PUBLIC/api/install.sh.php?token=$TOKEN&name=srv-b&watch=\$HOME&method=auto' | bash
+    curl -fsSL '$PUBLIC/api/install.sh.php?token=$TOKEN&name=srv-b&watch=auto&method=auto' | bash
 
- Atau ganti metode: &method=systemd-system | systemd-user | cron | nohup
+ Ganti metode kalau perlu: &method=systemd-system | systemd-user | cron | nohup
 
- Langkah berikutnya:
-  1. Login panel di $PUBLIC (Ctrl+F5 untuk force-reload UI baru)
-  2. Tab Agents -> + Add server -> Generate -> Salin -> paste di server target
+ Langkah berikutnya di server target:
+  1. Paste salah satu one-liner di atas PERSIS (dengan tanda kutip)
+  2. Installer auto-detect watch_dir (webroot/home/public_html)
+  3. Installer auto-pilih metode (systemd/cron/nohup)
+  4. Butuh MINIMAL: python3 + curl (inotify-tools opsional)
+  5. Agent muncul di panel tab Agents dalam ~30 detik
+
+ Cek log agent di server target:
+  systemctl status ehomee-agent               # mode systemd
+  systemctl --user status ehomee-agent        # mode systemd-user
+  tail -f /opt/ehomee-agent/agent.log         # mode cron/nohup (root)
+  tail -f ~/.local/share/ehomee-agent/agent.log  # mode cron/nohup (user)
 =========================================
 EOF
