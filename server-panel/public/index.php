@@ -115,6 +115,15 @@ $csrf = csrf_token();
         <label class="switch" style="flex-direction:row; align-items:center;">
           <input type="checkbox" id="add-agent-userm"> jalankan sebagai user biasa (tanpa sudo)
         </label>
+        <label>Metode start
+          <select id="add-agent-method">
+            <option value="auto">auto (rekomendasi) — deteksi systemd / cron / nohup</option>
+            <option value="systemd-system">systemd-system (butuh root)</option>
+            <option value="systemd-user">systemd-user (user biasa, butuh systemd)</option>
+            <option value="cron">cron @reboot (fallback, auto-supervise tiap menit)</option>
+            <option value="nohup">nohup (fallback terakhir, tidak auto-restart reboot)</option>
+          </select>
+        </label>
       </div>
       <div class="form-row">
         <button class="btn primary" id="add-agent-gen">Generate one-liner</button>

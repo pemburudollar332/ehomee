@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# ehomee agent installer (Ubuntu/Debian)
-# Auto-detect: root -> systemd system service; non-root -> systemd user service.
-# Placeholder di-replace oleh /api/install.sh.php sebelum di-serve:
-#   __PANEL_URL__, __ENROLL_TOKEN__, __AGENT_NAME__, __WATCH_DIR__
+# ehomee agent installer — universal (jalan di user apa pun, auto-pilih metode).
+# Metode yang didukung (auto-fallback berjenjang):
+#   1. systemd-system (root)
+#   2. systemd-user   (user biasa)
+#   3. cron @reboot   (fallback kalau systemd-user mati / tidak ada linger)
+#   4. nohup          (fallback terakhir, mis. di container tanpa systemd)
+#
+# Placeholder akan di-replace oleh /api/install.sh.php sebelum di-serve:
+#   __PANEL_URL__, __ENROLL_TOKEN__, __AGENT_NAME__, __WATCH_DIR__, __METHOD__
 
 set -euo pipefail
 
@@ -10,44 +15,74 @@ PANEL_URL="${PANEL_URL:-__PANEL_URL__}"
 ENROLL_TOKEN="${ENROLL_TOKEN:-__ENROLL_TOKEN__}"
 AGENT_NAME="${AGENT_NAME:-__AGENT_NAME__}"
 WATCH_DIR="${WATCH_DIR:-__WATCH_DIR__}"
+METHOD_REQUESTED="${METHOD:-__METHOD__}"
+
+# default kalau placeholder masih kosong
+[[ "$METHOD_REQUESTED" == __METHOD__ || -z "$METHOD_REQUESTED" ]] && METHOD_REQUESTED="auto"
 
 if [[ -z "$PANEL_URL" || "$PANEL_URL" == __PANEL_URL__ ]]; then
   echo "PANEL_URL kosong — gunakan one-liner yang di-generate dari panel." >&2
   exit 1
 fi
-if [[ -z "$AGENT_NAME" ]]; then
-  AGENT_NAME="$(hostname)"
-fi
+[[ -z "$AGENT_NAME" ]] && AGENT_NAME="$(hostname)"
 
-# ---- deteksi mode -------------------------------------------------------
-if [[ $EUID -eq 0 ]]; then
-  MODE=system
+CURRENT_USER="$(id -un)"
+IS_ROOT=0
+[[ $EUID -eq 0 ]] && IS_ROOT=1
+
+# ---- path install (selalu per-user kecuali root) -----------------------
+if [[ $IS_ROOT -eq 1 ]]; then
   AGENT_DIR="${AGENT_DIR:-/opt/ehomee-agent}"
-  SERVICE_DIR="/etc/systemd/system"
-  WANTED_BY="multi-user.target"
-  SYSTEMCTL=(systemctl)
-  EXTRA_SERVICE="User=root"
 else
-  MODE=user
   AGENT_DIR="${AGENT_DIR:-$HOME/.local/share/ehomee-agent}"
-  SERVICE_DIR="$HOME/.config/systemd/user"
-  WANTED_BY="default.target"
-  SYSTEMCTL=(systemctl --user)
-  EXTRA_SERVICE=""
-  # default watch_dir yang masuk akal untuk user
-  if [[ -z "${WATCH_DIR// }" || "$WATCH_DIR" == "/var/www/html" ]]; then
+  # default watch_dir untuk user biasa
+  if [[ -z "${WATCH_DIR// }" || "$WATCH_DIR" == "/var/www/html" || "$WATCH_DIR" == '$HOME' ]]; then
     WATCH_DIR="$HOME"
   fi
 fi
 
-echo ">> mode        : $MODE"
-echo ">> user        : $(id -un) (uid=$EUID)"
-echo ">> panel       : $PANEL_URL"
-echo ">> agent name  : $AGENT_NAME"
-echo ">> watch dir   : $WATCH_DIR"
-echo ">> install dir : $AGENT_DIR"
+# ---- deteksi kapabilitas sistem ----------------------------------------
+has_systemd_system() {
+  [[ $IS_ROOT -eq 1 ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+has_systemd_user() {
+  command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1
+}
+has_cron() {
+  command -v crontab >/dev/null 2>&1 && (command -v cron >/dev/null 2>&1 || pgrep -x crond >/dev/null 2>&1 || pgrep -x cron >/dev/null 2>&1 || true)
+}
 
-# ---- dependencies -------------------------------------------------------
+# ---- pilih method ------------------------------------------------------
+pick_method() {
+  case "$METHOD_REQUESTED" in
+    auto)
+      if has_systemd_system; then echo systemd-system
+      elif has_systemd_user;  then echo systemd-user
+      elif has_cron;          then echo cron
+      else                         echo nohup
+      fi
+      ;;
+    systemd-system|systemd-user|cron|nohup) echo "$METHOD_REQUESTED" ;;
+    *) echo "METHOD tidak dikenal: $METHOD_REQUESTED" >&2; exit 2 ;;
+  esac
+}
+METHOD="$(pick_method)"
+
+# validasi method yang dipaksa tapi tidak didukung
+case "$METHOD" in
+  systemd-system) has_systemd_system || { echo "ERROR: systemd-system butuh root + systemd aktif." >&2; exit 2; } ;;
+  systemd-user)   has_systemd_user   || { echo "ERROR: systemctl --user tidak tersedia. Coba METHOD=cron atau nohup." >&2; exit 2; } ;;
+  cron)           has_cron           || { echo "ERROR: cron tidak ditemukan." >&2; exit 2; } ;;
+esac
+
+echo ">> panel        : $PANEL_URL"
+echo ">> agent name   : $AGENT_NAME"
+echo ">> user         : $CURRENT_USER (uid=$EUID)"
+echo ">> method       : $METHOD"
+echo ">> install dir  : $AGENT_DIR"
+echo ">> watch dir    : $WATCH_DIR"
+
+# ---- dependencies ------------------------------------------------------
 need_deps() {
   local miss=()
   command -v python3    >/dev/null 2>&1 || miss+=("python3")
@@ -56,34 +91,44 @@ need_deps() {
   printf '%s\n' "${miss[@]}"
 }
 
-if [[ $MODE == system ]]; then
+if [[ $IS_ROOT -eq 1 ]]; then
   export DEBIAN_FRONTEND=noninteractive
-  echo ">> install dependencies..."
-  apt-get update -qq
-  apt-get install -y -qq python3 inotify-tools ca-certificates curl
+  if command -v apt-get >/dev/null 2>&1; then
+    echo ">> install dependencies (apt)..."
+    apt-get update -qq
+    apt-get install -y -qq python3 inotify-tools ca-certificates curl
+  elif command -v dnf >/dev/null 2>&1; then
+    echo ">> install dependencies (dnf)..."
+    dnf install -y python3 inotify-tools ca-certificates curl
+  elif command -v yum >/dev/null 2>&1; then
+    echo ">> install dependencies (yum)..."
+    yum install -y python3 inotify-tools ca-certificates curl
+  elif command -v apk >/dev/null 2>&1; then
+    echo ">> install dependencies (apk)..."
+    apk add --no-cache python3 inotify-tools ca-certificates curl
+  fi
 else
   MISSING="$(need_deps | tr '\n' ' ' | sed 's/ $//')"
   if [[ -n "$MISSING" ]]; then
     echo ""
     echo "ERROR: dependency belum ada di sistem: $MISSING" >&2
-    echo "       Mode user tidak bisa apt-install. Minta admin server ini untuk jalankan:" >&2
+    echo "       Mode user tidak bisa install paket. Minta admin jalankan sekali:" >&2
     echo "         sudo apt install -y python3 inotify-tools curl ca-certificates" >&2
-    echo "       lalu ulangi one-liner ini." >&2
+    echo "         # atau: sudo dnf/yum/apk install python3 inotify-tools curl ca-certificates" >&2
     exit 1
   fi
 fi
 
-mkdir -p "$AGENT_DIR" "$SERVICE_DIR"
+mkdir -p "$AGENT_DIR"
 mkdir -p "$WATCH_DIR" 2>/dev/null || true
 
-# ---- fetch agent.py -----------------------------------------------------
+# ---- fetch agent.py ----------------------------------------------------
 echo ">> fetch agent.py..."
-AGENT_PY_URL="${PANEL_URL%/}/api/agent.py.php"
-curl -fsSL "$AGENT_PY_URL" -o "$AGENT_DIR/agent.py"
+curl -fsSL "${PANEL_URL%/}/api/agent.py.php" -o "$AGENT_DIR/agent.py"
 chmod 0755 "$AGENT_DIR/agent.py"
 
-# ---- register -----------------------------------------------------------
-echo ">> register agent ke panel..."
+# ---- register ke panel -------------------------------------------------
+echo ">> register ke panel..."
 HOSTNAME_V="$(hostname)"
 OS_V="$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-$NAME $VERSION}" || uname -a)"
 ARCH_V="$(uname -m)"
@@ -95,12 +140,14 @@ REG_RESP="$(curl -fsSL -X POST \
   --data-urlencode "os=$OS_V" \
   --data-urlencode "arch=$ARCH_V" \
   --data-urlencode "watch_dir=$WATCH_DIR" \
+  --data-urlencode "install_user=$CURRENT_USER" \
+  --data-urlencode "install_method=$METHOD" \
   --data-urlencode "version=1.0" \
   "${PANEL_URL%/}/api/agent/register.php")"
 
-AGENT_ID="$(printf '%s'  "$REG_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("agent_id",""))')"
-API_KEY="$(printf '%s'   "$REG_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("api_key",""))')"
-REPORT_URL="$(printf '%s' "$REG_RESP"| python3 -c 'import json,sys; print(json.load(sys.stdin).get("report_url",""))')"
+AGENT_ID="$(printf  '%s' "$REG_RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("agent_id",""))')"
+API_KEY="$(printf   '%s' "$REG_RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("api_key",""))')"
+REPORT_URL="$(printf '%s' "$REG_RESP"| python3 -c 'import json,sys;print(json.load(sys.stdin).get("report_url",""))')"
 
 if [[ -z "$AGENT_ID" || -z "$API_KEY" ]]; then
   echo "Gagal register. Response:" >&2
@@ -108,8 +155,7 @@ if [[ -z "$AGENT_ID" || -z "$API_KEY" ]]; then
   exit 1
 fi
 
-# ---- config -------------------------------------------------------------
-echo ">> tulis config..."
+# ---- config.env --------------------------------------------------------
 cat > "$AGENT_DIR/config.env" <<EOF
 PANEL_URL=$PANEL_URL
 REPORT_URL=$REPORT_URL
@@ -120,70 +166,192 @@ INTERVAL=30
 EOF
 chmod 600 "$AGENT_DIR/config.env"
 
-# ---- service unit -------------------------------------------------------
-echo ">> systemd unit ($MODE mode)..."
-SVC_PATH="$SERVICE_DIR/ehomee-agent.service"
-cat > "$SVC_PATH" <<EOF
+# ---- wrapper: agent-start.sh ------------------------------------------
+# Dipakai oleh semua method supaya cara start konsisten.
+cat > "$AGENT_DIR/agent-start.sh" <<'WRAP'
+#!/usr/bin/env bash
+set -u
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+set -a
+# shellcheck disable=SC1091
+. "$DIR/config.env"
+set +a
+exec /usr/bin/python3 "$DIR/agent.py"
+WRAP
+chmod 0755 "$AGENT_DIR/agent-start.sh"
+
+# ---- method-specific install ------------------------------------------
+EXTRA_NOTE=""
+case "$METHOD" in
+
+  systemd-system)
+    SVC="/etc/systemd/system/ehomee-agent.service"
+    cat > "$SVC" <<EOF
 [Unit]
 Description=ehomee remote agent ($AGENT_NAME)
 After=network.target
 
 [Service]
 Type=simple
-EnvironmentFile=$AGENT_DIR/config.env
-ExecStart=/usr/bin/python3 $AGENT_DIR/agent.py
+ExecStart=$AGENT_DIR/agent-start.sh
 Restart=always
 RestartSec=5
-$EXTRA_SERVICE
+User=root
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=$WANTED_BY
+WantedBy=multi-user.target
 EOF
+    systemctl daemon-reload
+    systemctl enable --now ehomee-agent
+    STATUS_CMD="systemctl status ehomee-agent"
+    LOG_CMD="journalctl -u ehomee-agent -f"
+    ;;
 
-"${SYSTEMCTL[@]}" daemon-reload
-"${SYSTEMCTL[@]}" enable --now ehomee-agent
+  systemd-user)
+    mkdir -p "$HOME/.config/systemd/user"
+    SVC="$HOME/.config/systemd/user/ehomee-agent.service"
+    cat > "$SVC" <<EOF
+[Unit]
+Description=ehomee remote agent ($AGENT_NAME)
+After=network.target
 
-sleep 2
-"${SYSTEMCTL[@]}" status ehomee-agent --no-pager --lines=5 || true
+[Service]
+Type=simple
+ExecStart=$AGENT_DIR/agent-start.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
-# ---- user mode: enable linger supaya service jalan walau user logout ----
-LINGER_NOTE=""
-if [[ $MODE == user ]]; then
-  if command -v loginctl >/dev/null 2>&1; then
-    if loginctl show-user "$(id -un)" 2>/dev/null | grep -q '^Linger=yes'; then
-      LINGER_NOTE="Linger sudah aktif. Service akan tetap jalan walau Anda logout."
-    else
-      if sudo -n true 2>/dev/null; then
-        sudo loginctl enable-linger "$(id -un)" && \
-          LINGER_NOTE="Linger diaktifkan otomatis. Service jalan walau Anda logout." || \
-          LINGER_NOTE="Linger GAGAL diaktifkan. Jalankan manual sebagai root: sudo loginctl enable-linger $(id -un)"
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload
+    systemctl --user enable --now ehomee-agent
+
+    # linger: service tetap hidup saat user logout
+    if command -v loginctl >/dev/null 2>&1; then
+      if loginctl show-user "$CURRENT_USER" 2>/dev/null | grep -q '^Linger=yes'; then
+        EXTRA_NOTE="Linger aktif — service jalan walau Anda logout."
+      elif sudo -n true 2>/dev/null; then
+        sudo loginctl enable-linger "$CURRENT_USER" \
+          && EXTRA_NOTE="Linger diaktifkan otomatis." \
+          || EXTRA_NOTE="Linger GAGAL. Jalankan: sudo loginctl enable-linger $CURRENT_USER"
       else
-        LINGER_NOTE="Agent akan BERHENTI saat Anda logout. Jalankan sekali sebagai root: sudo loginctl enable-linger $(id -un)"
+        EXTRA_NOTE="Agent BERHENTI saat logout. Minta admin jalankan: sudo loginctl enable-linger $CURRENT_USER"
       fi
     fi
-  fi
+    STATUS_CMD="systemctl --user status ehomee-agent"
+    LOG_CMD="journalctl --user -u ehomee-agent -f"
+    ;;
+
+  cron)
+    # crond.sh — supervise: kalau proses mati, restart; juga dipanggil @reboot
+    SUP="$AGENT_DIR/agent-supervise.sh"
+    PIDF="$AGENT_DIR/agent.pid"
+    LOGF="$AGENT_DIR/agent.log"
+    cat > "$SUP" <<EOF
+#!/usr/bin/env bash
+DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+PIDF="$PIDF"
+LOGF="$LOGF"
+# sudah jalan?
+if [[ -f "\$PIDF" ]] && kill -0 "\$(cat "\$PIDF" 2>/dev/null)" 2>/dev/null; then
+  exit 0
 fi
+# start baru
+nohup "\$DIR/agent-start.sh" >> "\$LOGF" 2>&1 &
+echo "\$!" > "\$PIDF"
+EOF
+    chmod 0755 "$SUP"
 
-STATUS_CMD=$([[ $MODE == system ]] && echo "systemctl status ehomee-agent" || echo "systemctl --user status ehomee-agent")
-LOG_CMD=$([[ $MODE == system ]] && echo "journalctl -u ehomee-agent -f" || echo "journalctl --user -u ehomee-agent -f")
+    # pasang crontab: @reboot + tiap menit supervise
+    CRON_MARK="# ehomee-agent ($AGENT_ID)"
+    TMP="$(mktemp)"
+    (crontab -l 2>/dev/null | grep -v "$CRON_MARK" || true) > "$TMP"
+    {
+      echo "$CRON_MARK"
+      echo "@reboot $SUP"
+      echo "* * * * * $SUP"
+    } >> "$TMP"
+    crontab "$TMP"
+    rm -f "$TMP"
 
+    # start langsung
+    "$SUP"
+    sleep 1
+    STATUS_CMD="cat $PIDF && ps -fp \$(cat $PIDF) || echo 'not running'"
+    LOG_CMD="tail -f $LOGF"
+    EXTRA_NOTE="Disupervise via cron tiap menit + @reboot. Log: $LOGF"
+    ;;
+
+  nohup)
+    PIDF="$AGENT_DIR/agent.pid"
+    LOGF="$AGENT_DIR/agent.log"
+    # matikan dulu kalau ada
+    if [[ -f "$PIDF" ]] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null; then
+      kill "$(cat "$PIDF")" 2>/dev/null || true
+      sleep 1
+    fi
+    nohup "$AGENT_DIR/agent-start.sh" >> "$LOGF" 2>&1 &
+    echo "$!" > "$PIDF"
+    STATUS_CMD="ps -fp \$(cat $PIDF)"
+    LOG_CMD="tail -f $LOGF"
+    EXTRA_NOTE="Mode nohup TIDAK auto-restart saat reboot. Untuk auto-start, pakai METHOD=cron."
+    ;;
+esac
+
+# ---- uninstall script --------------------------------------------------
+cat > "$AGENT_DIR/uninstall.sh" <<EOF
+#!/usr/bin/env bash
+set -u
+METHOD="$METHOD"
+AGENT_DIR="$AGENT_DIR"
+AGENT_ID="$AGENT_ID"
+case "\$METHOD" in
+  systemd-system)
+    systemctl disable --now ehomee-agent 2>/dev/null || true
+    rm -f /etc/systemd/system/ehomee-agent.service
+    systemctl daemon-reload
+    ;;
+  systemd-user)
+    systemctl --user disable --now ehomee-agent 2>/dev/null || true
+    rm -f "\$HOME/.config/systemd/user/ehomee-agent.service"
+    systemctl --user daemon-reload
+    ;;
+  cron)
+    (crontab -l 2>/dev/null | grep -v "ehomee-agent (\$AGENT_ID)" | grep -v "\$AGENT_DIR/agent-supervise.sh") | crontab -
+    [[ -f "\$AGENT_DIR/agent.pid" ]] && kill "\$(cat "\$AGENT_DIR/agent.pid")" 2>/dev/null || true
+    ;;
+  nohup)
+    [[ -f "\$AGENT_DIR/agent.pid" ]] && kill "\$(cat "\$AGENT_DIR/agent.pid")" 2>/dev/null || true
+    ;;
+esac
+rm -rf "\$AGENT_DIR"
+echo "ehomee-agent (\$METHOD) uninstalled."
+EOF
+chmod 0755 "$AGENT_DIR/uninstall.sh"
+
+# ---- ringkasan ---------------------------------------------------------
 cat <<EOF
 
 =========================================
- ehomee agent - terpasang ($MODE mode)
+ ehomee agent TERPASANG
 =========================================
- Agent ID : $AGENT_ID
- Name     : $AGENT_NAME
- User     : $(id -un)
- Panel    : $PANEL_URL
- Watch    : $WATCH_DIR
- Install  : $AGENT_DIR
- Service  : $STATUS_CMD
- Logs     : $LOG_CMD
+ Method    : $METHOD
+ Agent ID  : $AGENT_ID
+ Name      : $AGENT_NAME
+ User      : $CURRENT_USER
+ Panel     : $PANEL_URL
+ Watch     : $WATCH_DIR
+ Install   : $AGENT_DIR
+ Status    : $STATUS_CMD
+ Logs      : $LOG_CMD
+ Uninstall : $AGENT_DIR/uninstall.sh
 EOF
-[[ -n "$LINGER_NOTE" ]] && echo " Linger   : $LINGER_NOTE"
+[[ -n "$EXTRA_NOTE" ]] && echo " Note      : $EXTRA_NOTE"
 cat <<EOF
 
  Buka panel -> tab "Agents" untuk verifikasi.

@@ -331,7 +331,7 @@
           <span class="status-dot"></span>
         </div>
         <div class="agent-meta small muted">
-          ${esc(a.hostname || '')} · ${esc(a.os || '')} · ${esc(a.arch || '')}
+          ${esc(a.hostname || '')} · ${esc(a.os || '')} · ${esc(a.arch || '')}${a.install_user ? ' · user: ' + esc(a.install_user) : ''}${a.install_method ? ' · ' + esc(a.install_method) : ''}
         </div>
         <div class="agent-stats">
           <div><span class="k">Last seen</span><span class="v">${a.last_seen ? fmtTime(a.last_seen) : '—'}</span></div>
@@ -384,6 +384,7 @@
     $('#add-agent-name').value = '';
     $('#add-agent-watch').value = '/var/www/html';
     $('#add-agent-userm').checked = false;
+    $('#add-agent-method').value = 'auto';
     $('#add-agent-result').classList.add('hidden');
     $('#modal-add-agent').classList.remove('hidden');
   };
@@ -391,9 +392,10 @@
   $('#add-agent-gen').onclick = () => {
     const name  = $('#add-agent-name').value.trim();
     const userMode = $('#add-agent-userm').checked;
+    const method = $('#add-agent-method').value || 'auto';
     let watch = $('#add-agent-watch').value.trim();
     if (!watch) watch = userMode ? '$HOME' : '/var/www/html';
-    const qs = new URLSearchParams({ token: enrollToken, name, watch });
+    const qs = new URLSearchParams({ token: enrollToken, name, watch, method });
     const prefix = userMode ? 'bash' : 'sudo bash';
     const oneliner = `curl -fsSL '${installUrl}?${qs.toString()}' | ${prefix}`;
     $('#add-agent-cmd').textContent = oneliner;

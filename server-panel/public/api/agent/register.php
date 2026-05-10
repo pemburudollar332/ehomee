@@ -30,6 +30,8 @@ $os       = trim((string)($body['os'] ?? ''));
 $arch     = trim((string)($body['arch'] ?? ''));
 $watch    = trim((string)($body['watch_dir'] ?? ''));
 $version  = trim((string)($body['version'] ?? ''));
+$instUser = trim((string)($body['install_user'] ?? ''));
+$instMeth = trim((string)($body['install_method'] ?? ''));
 
 $api_key  = bin2hex(random_bytes(24));
 $agent_id = 'agt_' . bin2hex(random_bytes(8));
@@ -37,22 +39,24 @@ $now = gmdate('c');
 $ip  = $_SERVER['REMOTE_ADDR'] ?? '';
 
 agents_with_lock(function (array $agents) use (
-    $agent_id, $name, $hostname, $os, $arch, $watch, $version, $api_key, $now, $ip
+    $agent_id, $name, $hostname, $os, $arch, $watch, $version, $api_key, $now, $ip, $instUser, $instMeth
 ) {
     $agents[] = [
-        'id'            => $agent_id,
-        'name'          => $name,
-        'hostname'      => $hostname,
-        'os'            => $os,
-        'arch'          => $arch,
-        'watch_dir'     => $watch,
-        'version'       => $version,
-        'api_key_hash'  => agent_hash_key($api_key),
-        'registered_at' => $now,
-        'last_seen'     => null,
-        'last_metrics'  => null,
-        'last_events'   => [],
-        'enroll_ip'     => $ip,
+        'id'             => $agent_id,
+        'name'           => $name,
+        'hostname'       => $hostname,
+        'os'             => $os,
+        'arch'           => $arch,
+        'watch_dir'      => $watch,
+        'version'        => $version,
+        'install_user'   => $instUser,
+        'install_method' => $instMeth,
+        'api_key_hash'   => agent_hash_key($api_key),
+        'registered_at'  => $now,
+        'last_seen'      => null,
+        'last_metrics'   => null,
+        'last_events'    => [],
+        'enroll_ip'      => $ip,
     ];
     return $agents;
 });

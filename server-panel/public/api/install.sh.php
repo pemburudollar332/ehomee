@@ -18,6 +18,10 @@ if (!enrollment_token() || !hash_equals(enrollment_token(), $token)) {
 
 $name     = preg_replace('/[^A-Za-z0-9._-]/', '-', (string)($_GET['name'] ?? '')) ?: '';
 $watch    = (string)($_GET['watch'] ?? '/var/www/html');
+$method   = (string)($_GET['method'] ?? 'auto');
+if (!in_array($method, ['auto','systemd-system','systemd-user','cron','nohup'], true)) {
+    $method = 'auto';
+}
 $panelUrl = panel_base_url();
 
 $tplPath = dirname(__DIR__, 2) . '/agent/install-agent.sh';
@@ -33,5 +37,6 @@ $repls = [
     '__ENROLL_TOKEN__'  => enrollment_token(),
     '__AGENT_NAME__'    => $name,
     '__WATCH_DIR__'     => $watch,
+    '__METHOD__'        => $method,
 ];
 echo strtr($tpl, $repls);

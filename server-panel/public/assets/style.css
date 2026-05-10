@@ -163,8 +163,8 @@ body.login { display: flex; align-items: center; justify-content: center; min-he
 .modal-box.modal-small { height: auto; max-height: 80vh; }
 .form-row { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .75rem; }
 .form-row label { display: flex; flex-direction: column; gap: .25rem; color: var(--muted); font-size: 12px; }
-.form-row input { background: #0b0f14; color: var(--text); border: 1px solid var(--border); padding: .5rem .65rem; border-radius: 6px; font: inherit; }
-.form-row input:focus { outline: none; border-color: var(--accent); }
+.form-row input, .form-row select { background: #0b0f14; color: var(--text); border: 1px solid var(--border); padding: .5rem .65rem; border-radius: 6px; font: inherit; }
+.form-row input:focus, .form-row select:focus { outline: none; border-color: var(--accent); }
 pre.cmd {
   background: #0b0f14; border: 1px solid var(--border); border-radius: 6px;
   padding: .65rem .8rem; white-space: pre-wrap; word-break: break-all;
