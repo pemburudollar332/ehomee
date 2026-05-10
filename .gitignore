@@ -1,3 +1,12 @@
 *.log
 .DS_Store
 node_modules/
+__pycache__/
+*.pyc
+server-panel/includes/config.local.php
+server-panel/data/agents.json
+server-panel/data/agent-events/
+.events.pending
+.snapshot
+server-panel/agent/.events.pending
+server-panel/agent/.snapshot
