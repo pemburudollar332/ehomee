@@ -39,12 +39,14 @@ rsync -a --delete \
   --exclude 'data/events.log' \
   --exclude 'includes/config.local.php' \
   "$SRC_DIR"/ "$PANEL_DIR"/
-mkdir -p "$PANEL_DIR/data"
+mkdir -p "$PANEL_DIR/data" "$PANEL_DIR/data/agent-events"
 touch "$PANEL_DIR/data/events.log"
+[[ -f "$PANEL_DIR/data/agents.json" ]] || echo '[]' > "$PANEL_DIR/data/agents.json"
 
 echo ">> generate config.local.php..."
 PASS_HASH="$(php -r "echo password_hash(getenv('P'), PASSWORD_BCRYPT);" P="$ADMIN_PASS")"
 APP_KEY="$(openssl rand -hex 32)"
+ENROLL_TOKEN="$(openssl rand -hex 16)"
 cat > "$PANEL_DIR/includes/config.local.php" <<PHP
 <?php
 return [
@@ -53,6 +55,8 @@ return [
   'admin_pass_hash'     => '$PASS_HASH',
   'app_key'             => '$APP_KEY',
   'events_log'          => '$PANEL_DIR/data/events.log',
+  'agents_file'         => '$PANEL_DIR/data/agents.json',
+  'enrollment_token'    => '$ENROLL_TOKEN',
   'max_edit_bytes'      => 2 * 1024 * 1024,   // 2 MB
   'max_upload_bytes'    => 100 * 1024 * 1024, // 100 MB
   'telegram_bot_token'  => '$TG_TOKEN',
@@ -139,5 +143,11 @@ Catatan:
   - Buka port di firewall: ufw allow $PORT/tcp
   - Sangat disarankan letakkan di belakang HTTPS/reverse proxy (Caddy/Nginx)
     dan batasi akses ke IP Anda di .htaccess.
+
+ Multi-server (fleet):
+  - Login ke panel, buka tab "Agents" -> "+ Add server" untuk mendapatkan
+    one-liner yang dijalankan di server B/C/D.
+  - Enrollment token awal: $ENROLL_TOKEN
+    (bisa di-rotate kapan saja dari tab Agents)
 ========================================
 EOF

@@ -46,14 +46,15 @@
   }
 
   // ---------- tab switch ----------
+  let agentsTimer = null;
   $$('.tab').forEach(btn => btn.addEventListener('click', () => {
     $$('.tab').forEach(b => b.classList.remove('active'));
     $$('.view').forEach(v => v.classList.remove('active'));
     btn.classList.add('active');
     $('#view-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'events') startEvents();
-    else stopEvents();
+    if (btn.dataset.tab === 'events') startEvents(); else stopEvents();
     if (btn.dataset.tab === 'system') loadSystem();
+    if (btn.dataset.tab === 'agents') startAgents(); else stopAgents();
   }));
 
   // ---------- files ----------
@@ -290,6 +291,121 @@
     }
   }
   $('#btn-sys-refresh').onclick = loadSystem;
+
+  // ---------- agents ----------
+  let panelUrl = '', enrollToken = '', installUrl = '';
+
+  async function loadAgents() {
+    try {
+      const j = await api('api/agents/list.php');
+      panelUrl = j.panel_url;
+      enrollToken = j.enrollment_token;
+      installUrl = j.install_url;
+      renderAgents(j.agents || []);
+    } catch (e) {
+      $('#agent-list').innerHTML = '<div class="alert err">' + esc(e.message) + '</div>';
+    }
+  }
+  function startAgents() { loadAgents(); stopAgents(); agentsTimer = setInterval(loadAgents, 5000); }
+  function stopAgents() { if (agentsTimer) clearInterval(agentsTimer); agentsTimer = null; }
+
+  function renderAgents(list) {
+    const box = $('#agent-list');
+    if (!list.length) {
+      box.innerHTML = '<div class="card empty"><div class="muted">Belum ada agent. Klik "+ Add server" untuk mendaftarkan server B/C/D.</div></div>';
+      return;
+    }
+    box.innerHTML = '';
+    list.forEach(a => {
+      const m = a.last_metrics || {};
+      const mem = m.memory, disk = m.disk;
+      const pct = (u, t) => t ? ((u / t) * 100).toFixed(1) + '%' : '0%';
+      const card = document.createElement('div');
+      card.className = 'agent-card status-' + a.status;
+      card.innerHTML = `
+        <div class="agent-head">
+          <div>
+            <b>${esc(a.name || a.id)}</b>
+            <span class="muted small">· ${esc(a.id)}</span>
+          </div>
+          <span class="status-dot"></span>
+        </div>
+        <div class="agent-meta small muted">
+          ${esc(a.hostname || '')} · ${esc(a.os || '')} · ${esc(a.arch || '')}
+        </div>
+        <div class="agent-stats">
+          <div><span class="k">Last seen</span><span class="v">${a.last_seen ? fmtTime(a.last_seen) : '—'}</span></div>
+          <div><span class="k">Uptime</span><span class="v">${m.uptime_sec ? fmtUptime(m.uptime_sec) : '—'}</span></div>
+          <div><span class="k">Load</span><span class="v">${m.loadavg ? m.loadavg.map(n => Number(n).toFixed(2)).join(' / ') : '—'}</span></div>
+          <div><span class="k">Watch</span><span class="v">${esc(a.watch_dir || '')}</span></div>
+          <div><span class="k">Memory</span><span class="v">${mem ? fmtBytes(mem.used) + ' / ' + fmtBytes(mem.total) + ' (' + pct(mem.used, mem.total) + ')' : '—'}</span></div>
+          <div><span class="k">Disk</span><span class="v">${disk ? fmtBytes(disk.used) + ' / ' + fmtBytes(disk.total) + ' (' + pct(disk.used, disk.total) + ')' : '—'}</span></div>
+        </div>
+        <div class="agent-actions">
+          <button class="btn small" data-act="detail">Events</button>
+          <button class="btn small danger" data-act="del">Hapus</button>
+        </div>
+      `;
+      card.querySelector('[data-act=detail]').onclick = () => openAgentDetail(a);
+      card.querySelector('[data-act=del]').onclick = () => deleteAgent(a);
+      box.appendChild(card);
+    });
+  }
+
+  async function deleteAgent(a) {
+    if (!confirm('Hapus agent "' + (a.name || a.id) + '"?\nAgent di server target akan tetap jalan — matikan dulu di sana:\n  sudo systemctl disable --now ehomee-agent')) return;
+    try { await api('api/agents/delete.php', { method: 'POST', body: form({ id: a.id }) }); loadAgents(); }
+    catch (e) { alert('Gagal hapus: ' + e.message); }
+  }
+
+  async function openAgentDetail(a) {
+    $('#agent-title').textContent = a.name || a.id;
+    $('#agent-sub').textContent = ' · ' + a.id + ' · ' + (a.hostname || '');
+    $('#modal-agent').classList.remove('hidden');
+    const box = $('#agent-detail');
+    box.innerHTML = '<div class="muted">memuat events…</div>';
+    try {
+      const j = await api('api/agents/events.php?id=' + encodeURIComponent(a.id) + '&limit=200');
+      if (!j.events.length) { box.innerHTML = '<div class="muted">belum ada event</div>'; return; }
+      const rows = j.events.map(ev => `
+        <div class="ev ev-${classifyEvent(ev.event)}">
+          <span class="ts">${esc(fmtTime(ev.ts))}</span>
+          <span class="tag">${esc(ev.event)}</span>
+          <span class="path">${esc(ev.path)}</span>
+        </div>
+      `).join('');
+      box.innerHTML = '<div class="events">' + rows + '</div>';
+    } catch (e) { box.innerHTML = '<div class="alert err">' + esc(e.message) + '</div>'; }
+  }
+  $('#agent-close').onclick = () => $('#modal-agent').classList.add('hidden');
+
+  // Modal Add agent (generate one-liner)
+  $('#btn-add-agent').onclick = () => {
+    $('#add-agent-name').value = '';
+    $('#add-agent-watch').value = '/var/www/html';
+    $('#add-agent-result').classList.add('hidden');
+    $('#modal-add-agent').classList.remove('hidden');
+  };
+  $('#add-agent-close').onclick = () => $('#modal-add-agent').classList.add('hidden');
+  $('#add-agent-gen').onclick = () => {
+    const name  = $('#add-agent-name').value.trim();
+    const watch = $('#add-agent-watch').value.trim() || '/var/www/html';
+    const qs = new URLSearchParams({ token: enrollToken, name, watch });
+    const oneliner = `curl -fsSL '${installUrl}?${qs.toString()}' | sudo bash`;
+    $('#add-agent-cmd').textContent = oneliner;
+    $('#add-agent-result').classList.remove('hidden');
+  };
+  $('#add-agent-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText($('#add-agent-cmd').textContent); $('#add-agent-copy').textContent = 'Tersalin ✓'; setTimeout(() => $('#add-agent-copy').textContent = 'Salin', 1500); }
+    catch (_) { alert('Gagal copy otomatis, select manual lalu Ctrl+C.'); }
+  };
+
+  $('#btn-rotate-token').onclick = async () => {
+    if (!confirm('Rotate enrollment token?\nOne-liner lama akan gagal; agent yang sudah terdaftar tetap aktif.')) return;
+    try { const j = await api('api/agents/rotate_token.php', { method: 'POST', body: form({}) }); enrollToken = j.enrollment_token; alert('Token baru: ' + j.enrollment_token.slice(0, 10) + '...'); }
+    catch (e) { alert('Gagal: ' + e.message); }
+  };
+  $('#btn-agents-refresh').onclick = loadAgents;
 
   // ---------- init ----------
   loadDir('');

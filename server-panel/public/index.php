@@ -21,6 +21,7 @@ $csrf = csrf_token();
       <button class="tab active" data-tab="files">Files</button>
       <button class="tab" data-tab="events">Events</button>
       <button class="tab" data-tab="system">System</button>
+      <button class="tab" data-tab="agents">Agents</button>
     </nav>
     <div class="meta">
       <span class="muted">user:</span> <b><?= htmlspecialchars($_SESSION['uid']) ?></b>
@@ -76,7 +77,69 @@ $csrf = csrf_token();
     </div>
     <div id="system-info" class="system"></div>
   </section>
+
+  <!-- AGENTS -->
+  <section class="view" id="view-agents">
+    <div class="toolbar">
+      <div>
+        <b>Remote agents</b>
+        <span class="muted">(server lain yang terhubung)</span>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="btn-add-agent">+ Add server</button>
+        <button class="btn" id="btn-rotate-token" title="Rotate enrollment token">Rotate token</button>
+        <button class="btn" id="btn-agents-refresh">Refresh</button>
+      </div>
+    </div>
+    <div id="agent-list" class="agent-list"></div>
+  </section>
 </main>
+
+<!-- Modal: add agent (one-liner) -->
+<div class="modal hidden" id="modal-add-agent">
+  <div class="modal-box modal-small">
+    <header>
+      <b>Install agent di server baru</b>
+      <div>
+        <button class="btn ghost" id="add-agent-close">Tutup</button>
+      </div>
+    </header>
+    <div class="pad">
+      <div class="form-row">
+        <label>Nama server (opsional)
+          <input id="add-agent-name" placeholder="srv-b, backend-1, db-prod...">
+        </label>
+        <label>Watch dir di server tersebut
+          <input id="add-agent-watch" value="/var/www/html">
+        </label>
+      </div>
+      <div class="form-row">
+        <button class="btn primary" id="add-agent-gen">Generate one-liner</button>
+      </div>
+      <div id="add-agent-result" class="hidden">
+        <p class="muted small">Jalankan sebagai root di server target. Agent akan terdaftar otomatis dalam beberapa detik.</p>
+        <pre class="cmd" id="add-agent-cmd"></pre>
+        <button class="btn small" id="add-agent-copy">Salin</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: detail agent -->
+<div class="modal hidden" id="modal-agent">
+  <div class="modal-box">
+    <header>
+      <div>
+        <b id="agent-title">-</b>
+        <span class="muted small" id="agent-sub"></span>
+      </div>
+      <div>
+        <button class="btn ghost" id="agent-close">Tutup</button>
+      </div>
+    </header>
+    <div id="agent-detail" class="pad"></div>
+  </div>
+</div>
 
 <!-- Modal editor -->
 <div class="modal hidden" id="modal-edit">
