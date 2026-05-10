@@ -20,6 +20,11 @@ $name     = preg_replace('/[^A-Za-z0-9._-]/', '-', (string)($_GET['name'] ?? '')
 $watch    = (string)($_GET['watch'] ?? 'auto');
 // Izinkan nilai khusus 'auto' untuk auto-detect di installer.
 if ($watch === '') $watch = 'auto';
+// Safety: kalau user kirim path dengan $HOME literal, biarkan sebagai-adalah
+// (installer akan resolve di runtime). Tapi kalau ada karakter aneh, fallback ke auto.
+if (preg_match('/["\'`\n\r\t]/', $watch)) {
+    $watch = 'auto';
+}
 $method   = (string)($_GET['method'] ?? 'auto');
 if (!in_array($method, ['auto','systemd-system','systemd-user','cron','nohup'], true)) {
     $method = 'auto';

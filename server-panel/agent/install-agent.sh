@@ -9,7 +9,19 @@
 # Placeholder akan di-replace oleh /api/install.sh.php sebelum di-serve:
 #   __PANEL_URL__, __ENROLL_TOKEN__, __AGENT_NAME__, __WATCH_DIR__, __METHOD__
 
-set -euo pipefail
+# NOTE: sengaja TIDAK pakai 'set -u' — di beberapa environment (sudo bash, container
+# minimal, cron, SSH tanpa env) variable seperti HOME bisa unset, dan -u akan crash.
+set -eo pipefail
+
+# ---- safety env: pastikan HOME selalu terdefinisi sebelum apa pun -------
+if [[ -z "${HOME:-}" ]]; then
+  HOME="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6)"
+  [[ -z "$HOME" ]] && HOME="$(eval echo ~$(id -un) 2>/dev/null)"
+  [[ -z "$HOME" ]] && HOME="/tmp"
+  export HOME
+fi
+# pastikan PATH waras
+export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
 PANEL_URL="${PANEL_URL:-__PANEL_URL__}"
 ENROLL_TOKEN="${ENROLL_TOKEN:-__ENROLL_TOKEN__}"
@@ -17,14 +29,26 @@ AGENT_NAME="${AGENT_NAME:-__AGENT_NAME__}"
 WATCH_DIR="${WATCH_DIR:-__WATCH_DIR__}"
 METHOD_REQUESTED="${METHOD:-__METHOD__}"
 
-# default kalau placeholder masih kosong
-[[ "$METHOD_REQUESTED" == __METHOD__ || -z "$METHOD_REQUESTED" ]] && METHOD_REQUESTED="auto"
+# Guard: placeholder marker di-rebuild supaya tidak ikut ter-replace oleh strtr.
+# Kalau installer dijalankan tanpa di-serve via panel (placeholder mentah), tolak.
+_PH_PREFIX="__PANEL"
+_PH_URL="${_PH_PREFIX}_URL__"
+_PH_METHOD="${_PH_PREFIX:0:2}METHOD__"
+_PH_AGENT="${_PH_PREFIX:0:2}AGENT_NAME__"
+_PH_WATCH="${_PH_PREFIX:0:2}WATCH_DIR__"
 
-if [[ -z "$PANEL_URL" || "$PANEL_URL" == __PANEL_URL__ ]]; then
+# default kalau placeholder masih utuh
+if [[ "$METHOD_REQUESTED" == "$_PH_METHOD" || -z "$METHOD_REQUESTED" ]]; then
+  METHOD_REQUESTED="auto"
+fi
+
+if [[ -z "$PANEL_URL" || "$PANEL_URL" == "$_PH_URL" ]]; then
   echo "PANEL_URL kosong — gunakan one-liner yang di-generate dari panel." >&2
   exit 1
 fi
-[[ -z "$AGENT_NAME" ]] && AGENT_NAME="$(hostname)"
+if [[ -z "$AGENT_NAME" || "$AGENT_NAME" == "$_PH_AGENT" ]]; then
+  AGENT_NAME="$(hostname 2>/dev/null || uname -n 2>/dev/null || cat /etc/hostname 2>/dev/null || echo agent)"
+fi
 
 CURRENT_USER="$(id -un)"
 IS_ROOT=0
@@ -91,12 +115,16 @@ detect_watch_dir() {
 }
 
 # Tentukan WATCH_DIR final
-if [[ -z "${WATCH_DIR// }" || "$WATCH_DIR" == "auto" || "$WATCH_DIR" == "__WATCH_DIR__" ]]; then
+if [[ -z "${WATCH_DIR// }" || "$WATCH_DIR" == "auto" || "$WATCH_DIR" == "$_PH_WATCH" ]]; then
   WATCH_DIR="$(detect_watch_dir)"
   WATCH_AUTO=1
 elif [[ "$WATCH_DIR" == '$HOME' ]]; then
   # user kirim '$HOME' literal (belum ter-expand) -> resolve
   WATCH_DIR="$HOME"
+  WATCH_AUTO=0
+elif [[ "$WATCH_DIR" == '$HOME/'* ]]; then
+  # user kirim '$HOME/public_html' literal -> resolve
+  WATCH_DIR="$HOME/${WATCH_DIR#\$HOME/}"
   WATCH_AUTO=0
 else
   WATCH_AUTO=0
@@ -194,9 +222,9 @@ chmod 0755 "$AGENT_DIR/agent.py"
 
 # ---- register ke panel -------------------------------------------------
 echo ">> register ke panel..."
-HOSTNAME_V="$(hostname)"
+HOSTNAME_V="$(hostname 2>/dev/null || uname -n 2>/dev/null || cat /etc/hostname 2>/dev/null || echo unknown)"
 OS_V="$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-$NAME $VERSION}" || uname -a)"
-ARCH_V="$(uname -m)"
+ARCH_V="$(uname -m 2>/dev/null || echo unknown)"
 
 REG_RESP="$(curl -fsSL -X POST \
   -H "X-Enroll-Token: $ENROLL_TOKEN" \
