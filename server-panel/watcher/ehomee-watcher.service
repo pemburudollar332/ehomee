@@ -1,0 +1,15 @@
+[Unit]
+Description=ehomee panel file watcher (inotify)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env bash {{PANEL_DIR}}/watcher/watch.sh
+Restart=always
+RestartSec=3
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
